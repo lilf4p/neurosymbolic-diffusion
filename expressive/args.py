@@ -47,7 +47,7 @@ class AbsArguments(Arguments):
     # Number of timesteps for diffusion sampler. If None, uses the first-hitting exact sampler
     variational_T: Optional[int] = 8
     test_T: Optional[int] = None
-    
+
 
     # Whether to use the exact variant of the model
     # Only turn this on for small problems
@@ -64,7 +64,7 @@ class MNISTArguments(Tap):
     embedding_size: int = 64
     config_file: str = None
 
-   
+
 
 
 class PathPlanningArguments(AbsArguments):
@@ -73,7 +73,7 @@ class PathPlanningArguments(AbsArguments):
     # Train size: 10000 maps
     batch_size: int = 50
     # Test size: 1000 maps
-    batch_size_test: int = 50 
+    batch_size_test: int = 50
     val_every_epochs: int = 5
     model: str = "CombResnet18"
     use_ray: bool = True
@@ -86,12 +86,12 @@ class PathPlanningArguments(AbsArguments):
     model_dir: str = "models/path_planning"
     wandb_resume_id: Optional[str] = None
 
-    # Tuned hyperparameters 
+    # Tuned hyperparameters
     beta: float = 12.0
     lr: float = 0.0005
     entropy_weight: float = 0.002
     w_denoise_weight: float = 0.00001
-    # Only for complex model 
+    # Only for complex model
     Z_weight: float = 0.0000031
 
     # Whether to embed the partially masked path into the model.
@@ -101,21 +101,25 @@ class PathPlanningArguments(AbsArguments):
     costs: List[float] = [0.8, 1.2, 5.3, 7.7, 9.2]
 
 class PathPlanningEvalArguments(PathPlanningArguments):
-    eval_at_epoch: List[int] 
-    run_ids: List[str] 
+    eval_at_epoch: List[int]
+    run_ids: List[str]
     test: bool = True
     eval_name: str
 
 
 class MNISTAbsorbingArguments(AbsArguments, MNISTArguments):
     model: str = "mnist"
-    
+
     epochs: int = 100
     entropy_weight: float = 0.01
     w_denoise_weight: float = 0.00002
     lr: float = 3e-4
-    beta: float = 20.0 
+    beta: float = 20.0
     Z_weight: float = 0.0001
+
+    # Use simple CNN model instead of diffusion model
+    use_cnn: bool = False
+    cnn_hidden_size: int = 256
 
 class RSBenchArguments(AbsArguments):
     dataset: str = "halfmnist" # [halfmnist, shortcutmnist, boia]
@@ -136,7 +140,7 @@ class RSBenchArguments(AbsArguments):
     w_denoise_weight: float = 0.0000015
     beta: float = 10
     entropy_variant: str = "exact_conditional" # [unconditional, exact_conditional]
-    entropy_epoch_increase: float = 0.0 # Starts at the value of entropy_weight and increases linearly with this value every epoch. Not used in paper. 
+    entropy_epoch_increase: float = 0.0 # Starts at the value of entropy_weight and increases linearly with this value every epoch. Not used in paper.
 
     backbone: str = "disentangled" # [disentangled, fullentangled, partialentangled]
 

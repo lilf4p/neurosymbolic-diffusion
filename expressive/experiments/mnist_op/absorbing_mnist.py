@@ -1,11 +1,12 @@
 from typing_extensions import override
+from typing import Union
 
 import torch
 from torch import Tensor
 from torch.nn import Linear
 
 from expressive.args import MNISTAbsorbingArguments
-from expressive.experiments.mnist_op.models import MNISTEncoder
+from expressive.experiments.mnist_op.models import MNISTEncoder, SimpleCNNNeSy
 from expressive.methods.base_model import BaseNeSyDiffusion, Problem
 from expressive.methods.cond_model import CondNeSyDiffusion
 from expressive.methods.simple_nesy_diff import SimpleNeSyDiffusion
@@ -79,10 +80,25 @@ class MNISTAddProblem(Problem):
 
         return ty_SKBY
 
-def create_mnistadd(args: MNISTAbsorbingArguments) -> BaseNeSyDiffusion:
-    model = MNISTAbsorbModel(args)
-    problem = MNISTAddProblem(args)
-    if args.simple_model:
-        return SimpleNeSyDiffusion(model, problem, args)
+def create_mnistadd(args: MNISTAbsorbingArguments) -> Union[BaseNeSyDiffusion, SimpleCNNNeSy]:
+    """
+    Factory function to create either a diffusion-based or CNN-based model
+    for the MNIST addition task.
+
+    Args:
+        args: Configuration arguments containing model settings
+
+    Returns:
+        Either a diffusion model (BaseNeSyDiffusion) or a simple CNN model (SimpleCNNNeSy)
+    """
+    if args.use_cnn:
+        print(f"Using SimpleCNNNeSy model with hidden_size={args.cnn_hidden_size}")
+        return SimpleCNNNeSy(args)
     else:
-        return CondNeSyDiffusion(model, problem, args)
+        print(f"Using Diffusion model with hidden_size={hidden_size(args.model)}")
+        model = MNISTAbsorbModel(args)
+        problem = MNISTAddProblem(args)
+        if args.simple_model:
+            return SimpleNeSyDiffusion(model, problem, args)
+        else:
+            return CondNeSyDiffusion(model, problem, args)

@@ -29,11 +29,32 @@ from expressive.methods.logger import (
 SWEEP = True
 
 
+def print_stats(stats: dict, prefix: str = ""):
+    """Print formatted statistics."""
+    if prefix:
+        print(f"  [{prefix.upper()}] ", end="")
+    else:
+        print("  ", end="")
+
+    # Format and print each stat
+    formatted = []
+    for key, value in stats.items():
+        # Remove prefix from key for cleaner output
+        clean_key = key.split("/")[-1] if "/" in key else key
+        if isinstance(value, float):
+            formatted.append(f"{clean_key}: {value:.4f}")
+        else:
+            formatted.append(f"{clean_key}: {value}")
+
+    print(" | ".join(formatted))
+
+
 def test(
     val_loader: DataLoader,
     test_logger: TestLog,
     model: MNISTAddProblem,
     device: torch.device,
+    verbose: bool = True,
 ):
     for i, batch in enumerate(val_loader):
         mn_digits, label_digits, label = (
@@ -50,7 +71,11 @@ def test(
         )
         if args.DEBUG:
             break
-    test_logger.push(len(val_loader))
+    stats = test_logger.push(len(val_loader))
+
+    if verbose:
+        # Print validation/test results
+        print_stats(stats, test_logger.log.prefix)
 
 
 args = MNISTAbsorbingArguments(explicit_bool=True).parse_args()
@@ -105,20 +130,42 @@ def main():
 
     log_iterations = len(train_loader) // args.log_per_epoch
 
-    train_logger = TrainLogger(log_iterations, TrainingLog, args)
+    train_logger = TrainLogger(log_iterations, TrainingLog, args, print_fn=print_stats)
     val_logger = TestLogger(TestLog, args, "val")
-    print("Length of val loader:", len(val_loader))
+
+    # Print training configuration
+    print("\n" + "=" * 60)
+    print("TRAINING CONFIGURATION")
+    print("=" * 60)
+    print(f"  Model type: {'CNN' if args.use_cnn else 'Diffusion'}")
+    print(f"  N (digits per operand): {args.N}")
+    print(f"  Operation: {args.op}")
+    print(f"  Batch size: {args.batch_size}")
+    print(f"  Learning rate: {args.lr}")
+    print(f"  Epochs: {args.epochs}")
+    print(f"  Train samples: {len(train_loader.dataset)}")
+    print(f"  Val samples: {len(val_loader.dataset)}")
+    print(f"  Test samples: {len(test_loader.dataset)}")
+    print("=" * 60 + "\n")
 
     optim = torch.optim.Adam(
         model.parameters(), lr=args.lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.0
     )
 
     os.makedirs(f"models/{run.id}", exist_ok=True)
-    for epoch in range(args.epochs):
-        print("----------------------------------------")
-        print("NEW EPOCH", epoch)
 
+    best_val_acc = 0.0
+
+    for epoch in range(args.epochs):
+        print("\n" + "=" * 60)
+        print(f"EPOCH {epoch + 1}/{args.epochs}")
+        print("=" * 60)
+
+        model.train()
         start_epoch_time = time.time()
+
+        epoch_loss = 0.0
+        num_batches = 0
 
         for i, batch in enumerate(train_loader):
             optim.zero_grad()
@@ -129,6 +176,9 @@ def main():
             label = vector_to_base10(label.to(device), args.N + 1)
             loss = model.loss(x, label, train_logger.log, w_labels)
 
+            epoch_loss += loss.item()
+            num_batches += 1
+
             loss.backward()
             optim.step()
 
@@ -138,29 +188,47 @@ def main():
                 break
 
         end_epoch_time = time.time()
-
         epoch_time = end_epoch_time - start_epoch_time
-        print(f"Epoch time: {epoch_time} seconds")
+        avg_epoch_loss = epoch_loss / num_batches
+
+        # Print epoch training summary
+        print(f"\n  [TRAIN] Avg Loss: {avg_epoch_loss:.4f} | Time: {epoch_time:.2f}s")
+
+        # Get and print latest training stats
+        train_stats = train_logger.get_epoch_stats()
+        if train_stats:
+            stats_str = " | ".join([f"{k}: {v:.4f}" for k, v in train_stats.items() if isinstance(v, float)])
+            print(f"  [TRAIN] {stats_str}")
 
         # If val not available, don't test during training
         if epoch % args.test_every_epochs == 0:
             if not args.test:
-                print("----- VALIDATING -----")
+                print("\n  ----- VALIDATION -----")
                 test(val_loader, val_logger, model, device)
                 test_time = time.time() - end_epoch_time
-                print(f"Test time: {test_time} seconds")
-            
-            print(f"Saving model to {run.id}")
-            wandb.save(f"model_{epoch}_{run.id}.pth")
-            torch.save(model.state_dict(), f"models/{run.id}/model_{epoch}.pth") 
-            
+                print(f"  Validation time: {test_time:.2f}s")
 
-    print("----- TESTING -----")
+            print(f"\n  Saving model to models/{run.id}/model_{epoch}.pth")
+            wandb.save(f"model_{epoch}_{run.id}.pth")
+            torch.save(model.state_dict(), f"models/{run.id}/model_{epoch}.pth")
+
+
+    # Final test
+    print("\n" + "=" * 60)
+    print("FINAL TESTING")
+    print("=" * 60)
     test_logger = TestLogger(TestLog, args, "test")
+    test_start_time = time.time()
     test(test_loader, test_logger, model, device)
-    print(f"Saving model to {run.id}")
+    print(f"\n  Test time: {time.time() - test_start_time:.2f}s")
+
+    print(f"\n  Saving final model to models/{run.id}/model_{epoch}.pth")
     wandb.save(f"model_{epoch}_{run.id}.pth")
-    torch.save(model.state_dict(), f"models/{run.id}/model_{epoch}.pth") 
+    torch.save(model.state_dict(), f"models/{run.id}/model_{epoch}.pth")
+
+    print("\n" + "=" * 60)
+    print("TRAINING COMPLETE!")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

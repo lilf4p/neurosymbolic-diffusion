@@ -7,7 +7,7 @@ from typing import Type, Generic, TypeVar
 
 from expressive.args import AbsArguments, Arguments
 
-# Add other types to also log them. 
+# Add other types to also log them.
 PRED_TYPES_W = ["w_TM"]
 PRED_TYPES_Y = ["y_fTM"]
 
@@ -39,6 +39,10 @@ class TrainingLog(Log):
         self.var_accuracy_y = 0.0
         self.var_accuracy_w = 0.0
 
+        # For simple CNN model
+        self.loss = 0.0
+        self.w_acc_train = 0.0
+
         self.w_preds = np.array([], dtype=np.int32)
         self.w_targets = np.array([], dtype=np.int32)
         self.args = args
@@ -46,6 +50,14 @@ class TrainingLog(Log):
     def create_dict(self, iterations: int) -> dict:
         def norm(x):
             return x / iterations
+
+        # Check if this is a simple CNN model training (loss is set)
+        if self.loss > 0:
+            # Simple CNN model logging
+            return {
+                "loss": norm(self.loss),
+                "w_acc_train": norm(self.w_acc_train),
+            }
 
         var_entropy_norm = norm(self.var_entropy)
         unmasking_entropy_norm = norm(self.unmasking_entropy)
@@ -94,7 +106,7 @@ class TestLog(Log):
         self.y_acc_top = 0.0
         self.pred_types = {
             ptw: 0.0 for ptw in PRED_TYPES_W
-        } 
+        }
         self.pred_types.update({
             pty: 0.0 for pty in PRED_TYPES_Y
         })
@@ -185,9 +197,9 @@ class BOIATestLog(TestLog):
                 for key, value in stats_dict.items()
             }
         stats_dict.update(super().create_dict(iterations))
-        
+
         return stats_dict
-    
+
 class TrainLogger(Generic[LOG]):
     log: LOG
 
@@ -196,15 +208,18 @@ class TrainLogger(Generic[LOG]):
         log_iterations: int,
         clazz: Type[LOG],
         args: Arguments,
+        print_fn=None,
     ):
         self.clazz = clazz
         self.args = args
+        self.print_fn = print_fn
         self.reset()
         if args.DEBUG:
             self.log_iterations = 1
         else:
             self.log_iterations = log_iterations
         self.iteration = 0
+        self.epoch_stats = {}  # Track stats across the epoch
 
     def reset(self):
         self.log = self.clazz(self.args)
@@ -215,12 +230,21 @@ class TrainLogger(Generic[LOG]):
         GLOBAL_ITERATIONS += 1
         if self.iteration % self.log_iterations == 0:
             stats = self.log.create_dict(self.log_iterations)
+            # Store stats for epoch-end printing
+            self.epoch_stats = stats.copy()
             try:
                 wandb.log(stats, step=GLOBAL_ITERATIONS)
             except Exception as e:
                 print(f"Error logging stats: {e}")
+            # Print stats if print function provided
+            if self.print_fn is not None:
+                self.print_fn(stats, "train")
             self.reset()
-        
+
+    def get_epoch_stats(self):
+        """Return the most recent stats from this epoch."""
+        return self.epoch_stats
+
 
 
 class TestLogger(Generic[LOG]):
