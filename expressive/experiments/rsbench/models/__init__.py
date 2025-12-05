@@ -3,26 +3,37 @@ import importlib
 
 
 def get_all_models():
+    models_dir = os.path.join(os.path.dirname(__file__))
     return [
         model.split(".")[0]
-        for model in os.listdir("models")
-        if not model.find("__") > -1 and "py" in model and os.path.isfile(model)
+        for model in os.listdir(models_dir)
+        if not model.find("__") > -1 and "py" in model and os.path.isfile(os.path.join(models_dir, model))
     ]
 
 
+# Lazy loading of model classes to avoid circular imports
 names = {}
-for model in get_all_models():
-    mod = importlib.import_module("models." + model)
-    class_name = {x.lower(): x for x in mod.__dir__()}[model.replace("_", "")]
-    names[model] = getattr(mod, class_name)
+_models_loaded = False
+
+def _load_models():
+    global names, _models_loaded
+    if _models_loaded:
+        return
+    for model in get_all_models():
+        mod = importlib.import_module("models." + model)
+        class_name = {x.lower(): x for x in mod.__dir__()}[model.replace("_", "")]
+        names[model] = getattr(mod, class_name)
+    _models_loaded = True
 
 
 def get_model(args, encoder, decoder, n_images, c_split):
+    _load_models()
     if args.model == "cext":
         return names[args.model](encoder, n_images=n_images, c_split=c_split)
     elif args.model in [
         "mnistdpl",
         "mnistsl",
+        "mnistindep",
         "mnistltn",
         "kanddpl",
         "kandltn",

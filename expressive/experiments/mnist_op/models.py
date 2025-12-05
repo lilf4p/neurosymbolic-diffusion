@@ -195,6 +195,7 @@ class SimpleCNNNeSy(nn.Module):
                 digit_acc = (preds == w_labels).float().mean()
                 log.w_acc_train += digit_acc.item()
         else:
+            # TODO: Implement loss computation using symbolic constraints when no concept supervision is available
             # If no concept supervision, we would need to use the symbolic constraint
             # For now, just use the digit labels if available
             raise ValueError("SimpleCNNNeSy requires w_labels (digit supervision) for training")

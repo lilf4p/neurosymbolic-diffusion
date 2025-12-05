@@ -28,6 +28,9 @@ dependencies = [
     "problog>=2.2.7",
     "ltntorch>=1.0.2",
     "scikit-learn>=1.6.1",
+    "seaborn>=0.13.2",
+    "graphviz>=0.21",
+    "tap>=0.2",
 ]
 
 [tool.setuptools]

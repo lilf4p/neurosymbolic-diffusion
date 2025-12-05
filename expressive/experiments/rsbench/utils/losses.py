@@ -31,6 +31,7 @@ def ADDMNIST_Classification(out_dict: dict, args):
         "mnistsl",
         "mnistslrec",
         "mnistpcbmsl",
+        "mnistindep",
     ]:
         loss = F.cross_entropy(out, labels, reduction="mean")
     else:
@@ -612,7 +613,7 @@ def XOR_Classification(out_dict: dict, args):
 
     out = out_dict["YS"]
     labels = out_dict["LABELS"].to(torch.long)
-    
+
     if args.model in [
         "xorsl",
         "xorcbm",

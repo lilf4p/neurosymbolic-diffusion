@@ -98,10 +98,11 @@ class nMNIST(Dataset):
         """
         try:
             # print("Loading data...")
-            data = load(path)
+            data = load(path, weights_only=False)
             # print("Loaded.")
-        except:
-            print("No dataset found.")
+        except Exception as e:
+            print(f"No dataset found at {path}: {e}")
+            raise FileNotFoundError(f"Dataset not found at {path}. Please ensure the dataset has been created.")
 
         images = data[split]["images"]
         labels = data[split]["labels"]

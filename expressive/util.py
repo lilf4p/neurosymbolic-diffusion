@@ -72,7 +72,8 @@ def safe_reward(
 ) -> Tuple[Tensor, Tensor]:
     # Numerically stable version of reward function as explained in Section "Numerically stable reward function"
     # Assumes samples are in the first dimension, so (samples, batch, violations)
-    weighted_violations_SB = beta * violations_SBY.sum(dim=-1)
+    # Convert to float for numerical operations
+    weighted_violations_SB = beta * violations_SBY.float().sum(dim=-1)
     mean_violations_B = torch.mean(weighted_violations_SB, dim=0)
     min_violations_B = torch.min(weighted_violations_SB, dim=0)[0]
     L_B = torch.minimum(mean_violations_B, max_exp_val + min_violations_B)
@@ -128,8 +129,8 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[: x.size(0)]
         return self.dropout(x)
 
-def get_models(problem): 
-    # Extremely naive computation of models. 
+def get_models(problem):
+    # Extremely naive computation of models.
     # Should only be used for the smallest of problems
     num_dims_w, num_classes_w = problem.shape_w()
 
@@ -147,7 +148,7 @@ def get_models(problem):
     return all_assignments_MW, all_y_outs_MY
 
 def compute_ece_sampled(hat_w_0_SBW: Tensor, w_0_BW: Tensor, ECE_bins: int, num_classes_w: int) -> float:
-    # Note: This only works in full-batch eval. 
+    # Note: This only works in full-batch eval.
     # Compute approximate ECE over concepts
     hat_w_one_hot_SBWD = F.one_hot(hat_w_0_SBW, num_classes=num_classes_w).float()
     # Distribution of w predictions (estimated by averaging over samples because diffusion models are not tractable)

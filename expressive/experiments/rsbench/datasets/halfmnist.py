@@ -3,6 +3,7 @@ from datasets.utils.base_dataset import BaseDataset, get_loader
 from datasets.utils.mnist_creation import load_2MNIST
 from backbones.addmnist_joint import MNISTPairsEncoder, MNISTPairsDecoder
 from backbones.addmnist_single import MNISTNeSyDiffClassifier, MNISTNeSyDiffEncoder, MNISTSingleEncoder
+from backbones.addmnist_indep_diff import MNISTIndepDiffClassifier
 from backbones.mnistcnn import EntangledDiffusionClassifier, EntangledDiffusionEncoder, MNISTAdditionCNN
 from backbones.disjointmnistcnn import DisjointMNISTAdditionCNN
 import numpy as np
@@ -62,6 +63,11 @@ class HALFMNIST(BaseDataset):
             return EntangledDiffusionEncoder(), EntangledDiffusionClassifier(n_images=2, n_classes=5)
         raise NotImplementedError("Wrong choice")
 
+    def get_backbone_indep_diff(self):
+        """Get backbone for independent diffusion model."""
+        # Always use embed_all_images=True since we need both encodings
+        return MNISTNeSyDiffEncoder(c_dim=5, n_images=2), MNISTIndepDiffClassifier(embed_all_images=True, n_images=2, c_dim=5)
+
     def get_split(self):
         if self.args.joint:
             return 1, (5, 5)
@@ -71,8 +77,8 @@ class HALFMNIST(BaseDataset):
     def get_concept_labels(self):
         return [str(i) for i in range(5)]
 
-    def get_concept_labels(self):
-        return [str(i) for i in range(9)]
+    def get_labels(self):
+        return [str(i) for i in range(9)]  # sums 0-8 for halfmnist (0-4 + 0-4)
 
     def get_w_dim(self):
         return (2, 5)

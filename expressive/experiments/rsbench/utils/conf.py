@@ -6,8 +6,8 @@ import numpy as np
 import os
 
 
-def get_device(args):
-    if not hasattr(args, "use_cuda"):
+def get_device(args=None):
+    if args is None or not hasattr(args, "use_cuda"):
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Check for available GPUs
     use_cuda = args.use_cuda and torch.cuda.is_available()
