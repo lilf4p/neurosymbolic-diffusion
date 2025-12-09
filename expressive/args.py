@@ -144,6 +144,11 @@ class RSBenchArguments(AbsArguments):
 
     backbone: str = "disentangled" # [disentangled, fullentangled, partialentangled]
 
+    # Classifier-Free Guidance (CFG) arguments
+    cfg_p_uncond: float = 0.1  # Probability of unconditional training (label dropout)
+    cfg_scale: float = 2.0  # Guidance scale for inference
+    use_cfg: bool = False  # Whether to use CFG during inference
+
     test_every_epochs: int = 10
     ECE_bins: int = 10
     # Number of samples of w and y for testing (using majority vote)

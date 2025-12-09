@@ -4,6 +4,7 @@ from datasets.utils.mnist_creation import load_2MNIST
 from backbones.addmnist_joint import MNISTPairsEncoder, MNISTPairsDecoder
 from backbones.addmnist_single import MNISTNeSyDiffClassifier, MNISTNeSyDiffEncoder, MNISTSingleEncoder
 from backbones.addmnist_indep_diff import MNISTIndepDiffClassifier
+from backbones.addmnist_suggested import MNISTSuggestedEncoder
 from backbones.mnistcnn import EntangledDiffusionClassifier, EntangledDiffusionEncoder, MNISTAdditionCNN
 from backbones.disjointmnistcnn import DisjointMNISTAdditionCNN
 import numpy as np
@@ -47,6 +48,11 @@ class HALFMNIST(BaseDataset):
 
             if self.args.backbone == "neural":
                 return DisjointMNISTAdditionCNN(n_images=self.get_split()[0]), None
+
+            if self.args.backbone == "suggested":
+                return MNISTSuggestedEncoder(c_dim=5), MNISTPairsDecoder(
+                    c_dim=10, latent_dim=10
+                )
 
             return MNISTSingleEncoder(c_dim=5), MNISTPairsDecoder(
                 c_dim=10, latent_dim=10

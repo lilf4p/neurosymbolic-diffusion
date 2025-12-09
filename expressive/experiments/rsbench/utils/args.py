@@ -90,6 +90,70 @@ def add_experiment_args(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--w_sl", type=float, default=10, help="Weight of Semantic Loss"
     )
+    parser.add_argument(
+        "--full_bce",
+        action="store_true",
+        default=False,
+        help="Use full BCE semantic loss (includes negative terms) instead of NLL (positive only).",
+    )
+    parser.add_argument(
+        "--use_rloo",
+        action="store_true",
+        default=False,
+        help="Use RLOO (Reinforce Leave-One-Out) loss for direct concept supervision instead of marginalization.",
+    )
+    parser.add_argument(
+        "--rloo_samples",
+        type=int,
+        default=16,
+        help="Number of samples for RLOO loss estimation (default: 16).",
+    )
+    # Flow matching / anti-collapse arguments
+    parser.add_argument(
+        "--flow_diversity_weight",
+        type=float,
+        default=0.1,
+        help="Weight for diversity loss in flow matching (default: 0.1).",
+    )
+    parser.add_argument(
+        "--flow_entropy_weight",
+        type=float,
+        default=0.01,
+        help="Weight for entropy regularization in flow matching (default: 0.01).",
+    )
+    parser.add_argument(
+        "--flow_samples",
+        type=int,
+        default=8,
+        help="Number of samples for flow matching diversity estimation (default: 8).",
+    )
+    # Mixture of Experts arguments
+    parser.add_argument(
+        "--moe_num_experts",
+        type=int,
+        default=4,
+        help="Number of experts in MoE model (default: 4).",
+    )
+    parser.add_argument(
+        "--moe_diversity_weight",
+        type=float,
+        default=0.1,
+        help="Weight for expert diversity loss in MoE (default: 0.1).",
+    )
+    # Noisy training arguments
+    parser.add_argument(
+        "--noise_scale",
+        type=float,
+        default=0.3,
+        help="Scale of noise to add during noisy training (default: 0.3).",
+    )
+    parser.add_argument(
+        "--noise_type",
+        type=str,
+        default="gaussian",
+        choices=["gaussian", "uniform", "dropout"],
+        help="Type of noise for noisy training (default: gaussian).",
+    )
     # LTN semantics for logical operators
     parser.add_argument(
         "--and_op", type=str, default="Prod", help="Semantic for the And Operator"
@@ -111,6 +175,52 @@ def add_experiment_args(parser: ArgumentParser) -> None:
     )
     parser.add_argument("--beta", type=float, default=2, help="Multiplier of KL")
     parser.add_argument("--w_h", type=float, default=1, help="Weight of entropy")
+    parser.add_argument("--entropy_type", type=str, default="unconditional",
+                        choices=["unconditional", "conditional"],
+                        help="Type of entropy: 'unconditional' H(c|x) or 'conditional' H(c|x,y)")
+    parser.add_argument("--w_consistency", type=float, default=0.0,
+                        help="Weight of concept consistency loss (like w_denoise in NeSy diffusion)")
+    parser.add_argument("--consistency_noise", type=float, default=0.3,
+                        help="Noise level for consistency augmentation (0-1)")
+
+    # Flow denoising arguments (mnistsl_flow)
+    parser.add_argument("--w_flow", type=float, default=1.0,
+                        help="Weight of flow denoising loss (like w_denoise in NeSy diffusion)")
+    parser.add_argument("--flow_hidden_dim", type=int, default=128,
+                        help="Hidden dimension for flow denoiser network")
+    parser.add_argument("--gumbel_tau", type=float, default=1.0,
+                        help="Temperature for Gumbel-Softmax sampling")
+    parser.add_argument("--gumbel_hard", action="store_true",
+                        help="Use hard (one-hot) Gumbel-Softmax samples")
+
+    # Adaptive loss arguments (mnistsl_adaptive)
+    parser.add_argument("--label_smoothing", type=float, default=0.1,
+                        help="Label smoothing factor (0 = no smoothing)")
+    parser.add_argument("--y_temperature", type=float, default=1.0,
+                        help="Temperature for Y predictions (higher = softer)")
+    parser.add_argument("--y_acc_threshold", type=float, default=0.95,
+                        help="Y accuracy threshold for adaptive weighting")
+    parser.add_argument("--y_weight_min", type=float, default=0.1,
+                        help="Minimum Y loss weight when accuracy is high")
+    parser.add_argument("--adaptive_y_weight", action="store_true", default=True,
+                        help="Use adaptive Y loss weighting")
+    parser.add_argument("--no_adaptive_y_weight", action="store_false", dest="adaptive_y_weight",
+                        help="Disable adaptive Y loss weighting")
+    parser.add_argument("--w_recon", type=float, default=1.0,
+                        help="Weight for concept reconstruction loss")
+
+    # Prototype model arguments (mnistsl_proto)
+    parser.add_argument("--embed_dim", type=int, default=64,
+                        help="Embedding dimension for prototype matching")
+    parser.add_argument("--w_proto", type=float, default=1.0,
+                        help="Weight for prototype alignment loss")
+    parser.add_argument("--proto_temp", type=float, default=0.1,
+                        help="Temperature for prototype softmax")
+    parser.add_argument("--proto_momentum", type=float, default=0.9,
+                        help="EMA momentum for prototype updates")
+    parser.add_argument("--recon_noise", type=float, default=0.3,
+                        help="Noise level for concept reconstruction")
+
     parser.add_argument("--w_c", type=float, default=1, help="Weight of concept sup")
 
     # optimization params
@@ -141,7 +251,7 @@ def add_experiment_args(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--backbone",
         default="conceptizer",
-        choices=["conceptizer", "neural"],
+        choices=["conceptizer", "neural", "suggested"],
         type=str,
         help="Which backbone to use",
     )

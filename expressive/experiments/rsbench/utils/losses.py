@@ -32,6 +32,13 @@ def ADDMNIST_Classification(out_dict: dict, args):
         "mnistslrec",
         "mnistpcbmsl",
         "mnistindep",
+        "mnistslsuggested",
+        "mnistsl_indep",
+        "mnistsl_noisy",
+        "mnistflow",
+        "mnistmoe",
+        "mnistsl_flow",
+        "mnistsl_adaptive",
     ]:
         loss = F.cross_entropy(out, labels, reduction="mean")
     else:

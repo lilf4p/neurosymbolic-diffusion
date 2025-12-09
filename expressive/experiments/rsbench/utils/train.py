@@ -406,6 +406,11 @@ def train(model: MnistDPL, dataset: BaseDataset, _loss: ADDMNIST_DPL, args):
             loss, losses = _loss(out_dict, args)
 
             loss.backward()
+
+            # Call post_backward hook if model has one (e.g., for EMA updates)
+            if hasattr(model, 'post_backward'):
+                model.post_backward()
+
             model.opt.step()
 
             if ys is None:
@@ -449,7 +454,7 @@ def train(model: MnistDPL, dataset: BaseDataset, _loss: ADDMNIST_DPL, args):
                     / len(y_pred.flatten())
                     * 100
                 )
-            else: 
+            else:
                 acc = (
                     (y_pred.detach().cpu() == y_true.detach().cpu()).sum().item()
                     / len(y_true)
@@ -563,11 +568,11 @@ def train(model: MnistDPL, dataset: BaseDataset, _loss: ADDMNIST_DPL, args):
 
             for key, value in cfs.items():
                 print("Concept collapse", key, 1 - compute_coverage(value))
-        
+
         elif args.task == "mnmath":
             y_labels = ["first", "second"]
             concept_labels = [
-                ["{i}" for i in range(10) for _ in range(4)] 
+                ["{i}" for i in range(10) for _ in range(4)]
             ]
             plot_multilabel_confusion_matrix(
                 y_true, y_pred, y_labels, "Labels", save_path="labels.png"
