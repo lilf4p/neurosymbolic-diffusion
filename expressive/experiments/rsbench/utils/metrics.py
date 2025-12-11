@@ -167,6 +167,7 @@ def evaluate_metrics(
                 "shortmnist",
                 "restrictedmnist",
                 "halfmnist",
+                "permutedhalfmnist",
                 "clipshortmnist",
             ]
             and not last
@@ -295,7 +296,7 @@ def evaluate_metrics(
                 1
             )  # all the items of probabilities are considered
             p_ys = p_ys.max(axis=1)
-        
+
         if args.dataset == "mnmath":
             cs = np.expand_dims(cs, axis=1)
 
@@ -319,6 +320,7 @@ def evaluate_metrics(
             "presddoia",
             "addmnist",
             "halfmnist",
+            "permutedhalfmnist",
             "shortmnist",
             "restrictedmnist",
             "clipsddoia",
@@ -554,7 +556,7 @@ def compute_boia_stats_nesymdm(out_dict):
     out_dict["CONCEPTS"] = out_dict["CONCEPTS"].cpu().numpy()
 
     return compute_boia_stats(out_dict, PRED_TYPES_Y, PRED_TYPES_W)
-    
+
 
 def compute_boia_stats(out_dict, pred_types_y, pred_types_w):
     y_true_B4 = out_dict["LABELS"]
@@ -569,8 +571,8 @@ def compute_boia_stats(out_dict, pred_types_y, pred_types_w):
         to_rtn.update(compute_f1_y(out_dict[pred_type].cpu().numpy(), y_true_B4, pred_type))
     for pred_type in pred_types_w:
         to_rtn.update(compute_f1_w(out_dict[pred_type].cpu().numpy(), w_true_B21, pred_type))
-    
-    # Currently not supported. Using BEARS implementation instead. 
+
+    # Currently not supported. Using BEARS implementation instead.
     # to_rtn.update(SDDOIA_eval_tloss_cacc_acc(out_dict))
     return to_rtn
 
@@ -756,7 +758,7 @@ def MNMATH_eval_tloss_cacc_acc(out_dict, concepts):
     """
     reprs = out_dict["CS"]
     concepts_flat = concepts.view(concepts.size(0), concepts.size(1) * concepts.size(2), 1)
-    
+
     L = len(reprs)
 
     objs = torch.split(

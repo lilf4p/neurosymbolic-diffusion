@@ -68,13 +68,13 @@ class MnistDPL(DeepProblogModel):
         # Worlds-queries matrix
         if args.task == "addition":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.w_q = build_worlds_queries_matrix(2, self.n_facts, "addmnist")
             self.nr_classes = 19
         elif args.task == "product":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.w_q = build_worlds_queries_matrix(2, self.n_facts, "productmnist")
             self.nr_classes = 37
@@ -223,7 +223,7 @@ class MnistDPL(DeepProblogModel):
         Raises:
             err: NotImplementedError if the loss function is not available
         """
-        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist"]:
+        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist", "permutedhalfmnist"]:
             return ADDMNIST_DPL(ADDMNIST_Cumulative)
         else:
             return NotImplementedError("Wrong dataset choice")

@@ -58,13 +58,13 @@ class MnistIndep(CExt):
         # Setup based on task
         if args.task == "addition":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.logic = build_worlds_queries_matrix(2, self.n_facts, "addmnist")
             self.nr_classes = 19
         elif args.task == "product":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.logic = build_worlds_queries_matrix(2, self.n_facts, "productmnist")
             self.nr_classes = 37
@@ -157,7 +157,7 @@ class MnistIndep(CExt):
         Returns:
             loss: semantic loss function
         """
-        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist"]:
+        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist", "permutedhalfmnist"]:
             return ADDMNIST_SL(ADDMNIST_Cumulative, self.logic, args)
         else:
             return NotImplementedError("Wrong dataset choice")

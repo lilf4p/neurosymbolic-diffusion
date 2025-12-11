@@ -55,9 +55,9 @@ class FlowMatchingLoss(nn.Module):
 
         # Task-specific setup
         if args.task == "addition":
-            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist"] else 5
+            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
         elif args.task == "product":
-            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist"] else 5
+            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
         else:
             self.n_facts = 5
 
@@ -188,11 +188,11 @@ class MnistFlow(CExt):
 
         # Task-specific setup
         if args.task == "addition":
-            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist"] else 5
+            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             self.logic = build_worlds_queries_matrix(2, self.n_facts, "addmnist")
             self.nr_classes = 19
         elif args.task == "product":
-            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist"] else 5
+            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             self.logic = build_worlds_queries_matrix(2, self.n_facts, "productmnist")
             self.nr_classes = 37
         elif args.task == "multiop":
@@ -254,7 +254,7 @@ class MnistFlow(CExt):
 
     def get_loss(self, args):
         """Returns the custom flow matching loss"""
-        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist"]:
+        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist", "permutedhalfmnist"]:
             base_loss = ADDMNIST_SL(ADDMNIST_Cumulative, self.logic, args)
             return FlowMatchingLoss(base_loss, self.logic, args, self)
         else:

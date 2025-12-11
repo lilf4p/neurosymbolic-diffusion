@@ -201,7 +201,7 @@ class MnistPcbmLTN(MnistLTN):
         return torch.stack([prob_digit1, prob_digit2], dim=1).view(-1, 2, self.n_facts)
 
     def get_loss(self, args):
-        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist"]:
+        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist", "permutedhalfmnist"]:
             return ADDMNIST_SAT_AGG(ADDMNIST_Cumulative, self.task, pcbm=True)
         else:
             return NotImplementedError("Wrong dataset choice")

@@ -264,7 +264,7 @@ class MnistPcbmDPL(MnistDPL):
         Raises:
             err: NotImplementedError if the loss function is not present
         """
-        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist"]:
+        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist", "permutedhalfmnist"]:
             return ADDMNIST_DPL(ADDMNIST_Cumulative, pcbm=True)
         else:
             return NotImplementedError("Wrong dataset choice")

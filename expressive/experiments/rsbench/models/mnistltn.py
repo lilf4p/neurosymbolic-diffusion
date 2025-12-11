@@ -48,17 +48,17 @@ class MnistLTN(CExt):
 
         if args.task == "addition":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.nr_classes = 19
         elif args.task == "product":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.nr_classes = 37
         elif args.task == "multiop":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.nr_classes = 3
 
@@ -125,7 +125,7 @@ class MnistLTN(CExt):
         Raises:
             err: NotImplementedError if loss is not implemented
         """
-        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist"]:
+        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist", "permutedhalfmnist"]:
             _and = None
             if args.and_op == "Godel":
                 _and = ltn.fuzzy_ops.AndMin()

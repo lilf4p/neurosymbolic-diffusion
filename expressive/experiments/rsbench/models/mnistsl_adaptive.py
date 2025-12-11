@@ -120,11 +120,11 @@ class MnistSLAdaptive(CExt):
 
         # Task-specific setup
         if args.task == "addition":
-            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist"] else 5
+            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             self.logic = build_worlds_queries_matrix(2, self.n_facts, "addmnist")
             self.nr_classes = 19
         elif args.task == "product":
-            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist"] else 5
+            self.n_facts = 10 if args.dataset not in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             self.logic = build_worlds_queries_matrix(2, self.n_facts, "productmnist")
             self.nr_classes = 37
         elif args.task == "multiop":
@@ -297,7 +297,7 @@ class MnistSLAdaptive(CExt):
 
     def get_loss(self, args):
         """Returns the adaptive semantic loss function"""
-        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist"]:
+        if args.dataset in ["addmnist", "shortmnist", "restrictedmnist", "halfmnist", "permutedhalfmnist"]:
             return ADDMNIST_SL_Adaptive(
                 ADDMNIST_Cumulative, self.logic, args, self
             )

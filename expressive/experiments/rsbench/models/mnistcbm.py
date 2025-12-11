@@ -68,12 +68,12 @@ class MnistCBM(CBMModule):
         # Worlds-queries matrix
         if args.task == "addition":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.nr_classes = 19
         elif args.task == "product":
             self.n_facts = (
-                10 if not args.dataset in ["halfmnist", "restrictedmnist"] else 5
+                10 if not args.dataset in ["halfmnist", "restrictedmnist", "permutedhalfmnist"] else 5
             )
             self.nr_classes = 37
         elif args.task == "multiop":

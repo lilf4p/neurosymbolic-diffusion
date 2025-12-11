@@ -122,7 +122,7 @@ class MNISTAbsorbingArguments(AbsArguments, MNISTArguments):
     cnn_hidden_size: int = 256
 
 class RSBenchArguments(AbsArguments):
-    dataset: str = "halfmnist" # [halfmnist, shortcutmnist, boia]
+    dataset: str = "halfmnist" # [halfmnist, shortcutmnist, boia, permutedhalfmnist]
     c_sup: int = 1
     joint: bool = False
     which_c: List[int] = [-1]
@@ -148,6 +148,11 @@ class RSBenchArguments(AbsArguments):
     cfg_p_uncond: float = 0.1  # Probability of unconditional training (label dropout)
     cfg_scale: float = 2.0  # Guidance scale for inference
     use_cfg: bool = False  # Whether to use CFG during inference
+
+    # Ablation study arguments
+    digit_permutation: str = "identity"  # For permutedhalfmnist: [identity, shift5, shuffle, reverse, swap01, mid]
+    no_entropy: bool = False  # Ablation: disable entropy regularization
+    no_denoising: bool = False  # Ablation: disable w denoising loss
 
     test_every_epochs: int = 10
     ECE_bins: int = 10
