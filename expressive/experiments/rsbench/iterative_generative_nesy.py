@@ -18,10 +18,11 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch.distributions import Categorical
 import numpy as np
-from typing import Optional, Tuple, Dict
-from dataclasses import dataclass
+from typing import Optional, Tuple, Dict, List
+from dataclasses import dataclass, field
 import sys
 import os
+from sklearn.metrics import f1_score
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 
@@ -36,6 +37,12 @@ class IterNeSyLog:
     uncond_entropy: float = 0.0
     loss: float = 0.0
     n_batches: int = 0
+    # For F1 and ECE computation
+    w_preds: List = field(default_factory=list)
+    w_targets: List = field(default_factory=list)
+    y_preds: List = field(default_factory=list)
+    y_targets: List = field(default_factory=list)
+    w_probs: List = field(default_factory=list)  # For ECE
 
     def reset(self):
         self.accuracy_w = 0.0
@@ -45,6 +52,11 @@ class IterNeSyLog:
         self.uncond_entropy = 0.0
         self.loss = 0.0
         self.n_batches = 0
+        self.w_preds = []
+        self.w_targets = []
+        self.y_preds = []
+        self.y_targets = []
+        self.w_probs = []
 
 
 class MNISTConceptEncoder(nn.Module):
@@ -106,52 +118,71 @@ class MNISTConceptEncoder(nn.Module):
         return torch.stack(logits_list, dim=1)  # (B, N, D)
 
 
-class BOIAConceptEncoder(nn.Module):
-    """Encodes BOIA pre-computed embeddings to concept probability distributions.
-
-    BOIA uses pre-computed ResNet embeddings (2048-dim) for each image,
-    and predicts 21 binary concepts.
-    """
-
-    def __init__(self, n_concepts: int = 21, n_values: int = 2, hidden_dim: int = 512, input_dim: int = 2048):
-        super().__init__()
-        self.n_concepts = n_concepts
-        self.n_values = n_values
-
-        # MLP encoder for pre-computed embeddings
-        self.encoder = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-        )
-
-        # Concept prediction heads (one per concept)
-        self.heads = nn.ModuleList([
-            nn.Linear(hidden_dim, n_values) for _ in range(n_concepts)
-        ])
-
-    def forward(self, x_BE: Tensor) -> Tensor:
-        """
-        Args:
-            x_BE: (B, 2048) pre-computed embeddings
-        Returns:
-            logits: (B, N, D) where N=n_concepts, D=n_values (2 for binary)
-        """
-        h = self.encoder(x_BE)  # (B, hidden)
-
-        logits_list = []
-        for i in range(self.n_concepts):
-            logits_i = self.heads[i](h)  # (B, D)
-            logits_list.append(logits_i)
-
-        return torch.stack(logits_list, dim=1)  # (B, N, D)
-
-
 # Keep old name for backwards compatibility
 ConceptEncoder = MNISTConceptEncoder
+
+
+def compute_ece(probs: np.ndarray, targets: np.ndarray, n_bins: int = 10) -> float:
+    """
+    Compute Expected Calibration Error (ECE) following BEARS implementation.
+
+    Args:
+        probs: (N, C) probability predictions for C classes, or (N,) for binary
+        targets: (N,) ground truth labels
+        n_bins: Number of bins for calibration
+
+    Returns:
+        ECE value
+    """
+    if probs.ndim == 1:
+        # Binary case: convert to 2-class format
+        probs = np.stack([1 - probs, probs], axis=-1)
+
+    # Get predicted class and confidence (max probability)
+    pred_classes = np.argmax(probs, axis=-1)
+    confidences = np.max(probs, axis=-1)
+    accuracies = (pred_classes == targets).astype(float)
+
+    # Compute ECE using binning
+    n_samples = len(targets)
+    if n_samples == 0:
+        return 0.0
+
+    bin_boundaries = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+
+    for i in range(n_bins):
+        in_bin = (confidences > bin_boundaries[i]) & (confidences <= bin_boundaries[i + 1])
+        count_in_bin = in_bin.sum()
+
+        if count_in_bin > 0:
+            avg_confidence = confidences[in_bin].mean()
+            avg_accuracy = accuracies[in_bin].mean()
+            ece += np.abs(avg_confidence - avg_accuracy) * count_in_bin / n_samples
+
+    return ece
+
+
+def compute_macro_f1_y(y_preds: np.ndarray, y_targets: np.ndarray) -> float:
+    """
+    Compute macro F1 for y predictions.
+
+    For MNIST: y is a single value (sum), compute F1 directly.
+    """
+    return f1_score(y_targets.flatten(), y_preds.flatten(), average='macro', zero_division=0)
+
+
+def compute_macro_f1_w(w_preds: np.ndarray, w_targets: np.ndarray) -> float:
+    """
+    Compute macro F1 for concept predictions.
+
+    Compute F1 per concept dimension and average.
+    """
+    f1_scores = []
+    for dim in range(w_preds.shape[1]):
+        f1 = f1_score(w_targets[:, dim], w_preds[:, dim], average='macro', zero_division=0)
+        f1_scores.append(f1)
+    return np.mean(f1_scores)
 
 
 class IterativeGenerativeNeSy(nn.Module):
@@ -178,7 +209,6 @@ class IterativeGenerativeNeSy(nn.Module):
         n_refine_steps: int = 5,
         hidden_dim: int = 256,
         encoder: nn.Module = None,
-        dataset_type: str = 'mnist',
     ):
         super().__init__()
         self.n_images = n_images
@@ -187,13 +217,10 @@ class IterativeGenerativeNeSy(nn.Module):
         self.entropy_weight = entropy_weight
         self.conditional_entropy = conditional_entropy
         self.n_refine_steps = n_refine_steps
-        self.dataset_type = dataset_type
 
         # Use provided encoder or create default MNIST encoder
         if encoder is not None:
             self.encoder = encoder
-        elif dataset_type == 'boia':
-            self.encoder = BOIAConceptEncoder(n_concepts=n_images, n_values=n_values, hidden_dim=hidden_dim)
         else:
             self.encoder = MNISTConceptEncoder(n_images, n_values, hidden_dim)
 
@@ -331,6 +358,16 @@ class IterativeGenerativeNeSy(nn.Module):
         # Get initial logits
         logits_BND = self.encoder(x_BX)
 
+        return self._compute_loss(logits_BND, y_BY, log, eval_w_BN)
+
+    def _compute_loss(
+        self,
+        logits_BND: Tensor,
+        y_BY: Tensor,
+        log: IterNeSyLog = None,
+        eval_w_BN: Optional[Tensor] = None,
+    ) -> Tensor:
+        """Compute loss for MNIST-like datasets with exact enumeration."""
         # Compute loss, entropy, and joint probabilities
         loss_B, entropy_B, probs_BM, cond_ent_B, uncond_ent_B = self.compute_semantic_loss_and_entropy(logits_BND, y_BY)
 
@@ -362,6 +399,10 @@ class IterativeGenerativeNeSy(nn.Module):
         self.eval()
         logits_BND = self.encoder(x_BX)
 
+        return self._compute_predict(logits_BND, y_BY)
+
+    def _compute_predict(self, logits_BND: Tensor, y_BY: Tensor = None) -> Tuple[Tensor, Tensor]:
+        """Predict for MNIST-like datasets."""
         # Compute joint probabilities p(w|x)
         B, N, D = logits_BND.shape
         probs_BND = F.softmax(logits_BND, dim=-1)
@@ -405,6 +446,10 @@ def train_and_evaluate():
     parser.add_argument('--wandb_project', type=str, default='nesy-diffusion-ablation')
     args = parser.parse_args()
 
+    # Validate dataset
+    if args.dataset not in ['halfmnist', 'shortmnist', 'xor']:
+        raise ValueError(f"Unknown dataset: {args.dataset}. Supported: halfmnist, shortmnist, xor")
+
     # Determine entropy type
     use_conditional = not args.unconditional_entropy
     entropy_type = 'conditional' if use_conditional else 'unconditional'
@@ -447,7 +492,6 @@ def train_and_evaluate():
         n_images = 2
         n_values = 5
         constraint_fn = lambda w: w.sum(dim=-1, keepdim=True)
-        dataset_type = 'mnist'
         print(f"Dataset: HalfMNIST - 2 images × 5 concepts, y = c1 + c2")
 
     elif args.dataset == 'shortmnist':
@@ -456,7 +500,6 @@ def train_and_evaluate():
         n_images = 2
         n_values = 10
         constraint_fn = lambda w: w.sum(dim=-1, keepdim=True)
-        dataset_type = 'mnist'
         print(f"Dataset: ShortcutMNIST (Even-Odd) - 2 images × 10 concepts, y = c1 + c2")
 
     elif args.dataset == 'xor':
@@ -465,20 +508,10 @@ def train_and_evaluate():
         n_values = 2
         # XOR constraint: y = (c1 XOR c2 XOR c3 XOR c4)
         constraint_fn = lambda w: ((w.sum(dim=-1) % 2)).unsqueeze(-1)
-        dataset_type = 'mnist'
         print(f"Dataset: XOR (MNIST Even-Odd) - 4 images × 2 concepts, y = XOR(c1,c2,c3,c4)")
 
-    elif args.dataset == 'boia':
-        # BDD-OIA: 21 binary concepts from pre-computed embeddings, complex constraint
-        n_images = 21  # 21 concepts
-        n_values = 2   # binary
-        # For BOIA, we need to use the dataset's y_from_w function
-        constraint_fn = dataset.y_from_w
-        dataset_type = 'boia'
-        print(f"Dataset: BOIA (BDD-OIA) - 21 binary concepts, complex driving constraint")
-
     else:
-        raise ValueError(f"Unknown dataset: {args.dataset}. Supported: halfmnist, shortmnist, xor, boia")
+        raise ValueError(f"Unknown dataset: {args.dataset}. Supported: halfmnist, shortmnist, xor")
 
     # Create model
     model = IterativeGenerativeNeSy(
@@ -487,7 +520,6 @@ def train_and_evaluate():
         constraint_fn=constraint_fn,
         entropy_weight=args.entropy_weight,
         conditional_entropy=use_conditional,
-        dataset_type=dataset_type,
     ).to(device)
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -498,7 +530,6 @@ def train_and_evaluate():
         'n_parameters': sum(p.numel() for p in model.parameters()),
         'n_images': n_images,
         'n_values': n_values,
-        'dataset_type': dataset_type,
     }, allow_val_change=True)
 
     optimizer = torch.optim.RAdam(model.parameters(), lr=args.lr)
@@ -517,8 +548,11 @@ def train_and_evaluate():
         for batch in train_loader:
             images, labels, concepts = batch
             images = images.to(device)
-            labels = labels.to(device).unsqueeze(-1) if labels.dim() == 1 else labels.to(device)
+            labels = labels.to(device)
             concepts = concepts.to(device)
+
+            if labels.dim() == 1:
+                labels = labels.unsqueeze(-1)
 
             optimizer.zero_grad()
             loss = model.loss(images, labels, log, concepts)
@@ -557,21 +591,26 @@ def train_and_evaluate():
         for batch in val_loader:
             images, labels, concepts = batch
             images = images.to(device)
-            labels = labels.to(device).unsqueeze(-1) if labels.dim() == 1 else labels.to(device)
+            labels = labels.to(device)
             concepts = concepts.to(device)
+
+            if labels.dim() == 1:
+                labels = labels.unsqueeze(-1)
 
             w_pred, y_pred = model.predict(images)
             val_correct_w += (w_pred == concepts).float().mean().item() * images.shape[0]
-            val_correct_y += (y_pred == labels).float().mean().item() * images.shape[0]
+            val_correct_y += (y_pred == labels).all(dim=-1).float().mean().item() * images.shape[0]
             val_total += images.shape[0]
 
         val_acc_w = val_correct_w / val_total
         val_acc_y = val_correct_y / val_total
 
-        wandb.log({
+        val_stats = {
             'val/acc_y': val_acc_y,
             'val/acc_w': val_acc_w,
-        })
+        }
+
+        wandb.log(val_stats)
 
         if val_acc_w > best_val_acc:
             best_val_acc = val_acc_w
@@ -585,12 +624,15 @@ def train_and_evaluate():
             for batch in ood_loaders[0]:
                 images, labels, concepts = batch
                 images = images.to(device)
-                labels = labels.to(device).unsqueeze(-1) if labels.dim() == 1 else labels.to(device)
+                labels = labels.to(device)
                 concepts = concepts.to(device)
+
+                if labels.dim() == 1:
+                    labels = labels.unsqueeze(-1)
 
                 w_pred, y_pred = model.predict(images)
                 correct_w += (w_pred == concepts).float().mean().item() * images.shape[0]
-                correct_y += (y_pred == labels).float().mean().item() * images.shape[0]
+                correct_y += (y_pred == labels).all(dim=-1).float().mean().item() * images.shape[0]
                 total += images.shape[0]
 
             ood_acc_w = correct_w / total
@@ -611,15 +653,21 @@ def train_and_evaluate():
                 wandb.run.summary['best_ood_epoch'] = epoch + 1
                 if (epoch + 1) % args.test_every == 0:
                     print(f"  *** New best OOD: {best_ood_acc*100:.1f}% ***")
+        else:
+            # No OOD loaders - print val stats
+            if (epoch + 1) % args.test_every == 0:
+                print(f"  Val: ACC_Y={val_acc_y*100:.1f}%, ACC_W={val_acc_w*100:.1f}%")
 
     # Final summary
-    wandb.run.summary['final_ood_acc_w'] = ood_acc_w
+    if ood_loaders:
+        wandb.run.summary['final_ood_acc_w'] = ood_acc_w
     wandb.run.summary['final_val_acc_w'] = val_acc_w
     wandb.run.summary['best_val_acc_w'] = best_val_acc
 
     print(f"\n{'='*60}")
     print(f"Training Complete!")
-    print(f"Best OOD ACC_W: {best_ood_acc*100:.1f}%")
+    if ood_loaders:
+        print(f"Best OOD ACC_W: {best_ood_acc*100:.1f}%")
     print(f"Best Val ACC_W: {best_val_acc*100:.1f}%")
     print(f"{'='*60}")
 
