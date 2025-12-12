@@ -168,7 +168,9 @@ def check_dataset(n_digits, data_folder, data_file, dataset_dim):
     Path(data_folder).mkdir(parents=True, exist_ok=True)
     data_path = os.path.join(data_folder, data_file)
     try:
-        load(data_path)
+        load(data_path, weights_only=False)
+        print(f"Dataset found at {data_path}")
+        return  # Dataset exists, no need to recreate
     except:
         print("No dataset found.")
         # Define dataset dimension so to have teh same number of worlds
