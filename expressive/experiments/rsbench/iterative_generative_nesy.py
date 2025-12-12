@@ -382,10 +382,10 @@ class IterativeGenerativeNeSy(nn.Module):
             log.cond_entropy += cond_ent_B.mean().item()
             log.uncond_entropy += uncond_ent_B.mean().item()
 
-            # Correct accuracy computation using p(y|x) and p(w|x,y)
-            # NOT independent argmax of marginals (which is wrong with high entropy!)
+            # Predict y first, then predict w conditioned on predicted y
+            # This matches how NeSy diffusion logs: sample w -> compute y from w -> measure accuracy
             y_pred = self.predict_y_from_probs(probs_BM)
-            w_pred = self.predict_w_from_probs(probs_BM, y_BY)  # Use true y for w accuracy
+            w_pred = self.predict_w_from_probs(probs_BM, y_pred)  # Use PREDICTED y, not true y
 
             log.accuracy_y += (y_pred == y_BY).float().mean().item()
             if eval_w_BN is not None:
