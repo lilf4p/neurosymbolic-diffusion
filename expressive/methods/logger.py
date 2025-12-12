@@ -54,10 +54,14 @@ class TrainingLog(Log):
         # Check if this is a simple CNN model training (loss is set)
         if self.loss > 0:
             # Simple CNN model logging
-            return {
+            result = {
                 "loss": norm(self.loss),
                 "w_acc_train": norm(self.w_acc_train),
             }
+            # Add Y accuracy if it's being tracked
+            if self.var_accuracy_y > 0:
+                result["var_accuracy_y"] = norm(self.var_accuracy_y)
+            return result
 
         var_entropy_norm = norm(self.var_entropy)
         unmasking_entropy_norm = norm(self.unmasking_entropy)

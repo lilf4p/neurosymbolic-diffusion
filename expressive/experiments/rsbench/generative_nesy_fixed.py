@@ -1,15 +1,7 @@
 """
-Iterative Generative NeSy Model
 
-Key insight: NeSyDM's success comes from ITERATIVE REFINEMENT, not just the loss components.
+NeSy CNN model with Semantic Loss and Entropy Regularization.
 
-This model uses iterative refinement without diffusion:
-1. Start with uniform prior over concepts
-2. Sample concepts, evaluate constraint satisfaction
-3. Update the posterior based on constraint feedback
-4. Repeat for T iterations
-
-This mimics the diffusion denoising process but without the noising step.
 """
 
 import torch
@@ -19,10 +11,9 @@ from torch import Tensor
 from torch.distributions import Categorical
 import numpy as np
 from typing import Optional, Tuple, Dict, List
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import sys
 import os
-from sklearn.metrics import f1_score
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 
@@ -37,12 +28,6 @@ class IterNeSyLog:
     uncond_entropy: float = 0.0
     loss: float = 0.0
     n_batches: int = 0
-    # For F1 and ECE computation
-    w_preds: List = field(default_factory=list)
-    w_targets: List = field(default_factory=list)
-    y_preds: List = field(default_factory=list)
-    y_targets: List = field(default_factory=list)
-    w_probs: List = field(default_factory=list)  # For ECE
 
     def reset(self):
         self.accuracy_w = 0.0
@@ -52,11 +37,6 @@ class IterNeSyLog:
         self.uncond_entropy = 0.0
         self.loss = 0.0
         self.n_batches = 0
-        self.w_preds = []
-        self.w_targets = []
-        self.y_preds = []
-        self.y_targets = []
-        self.w_probs = []
 
 
 class MNISTConceptEncoder(nn.Module):
@@ -67,10 +47,11 @@ class MNISTConceptEncoder(nn.Module):
     - XOR/MNIST-EO: (B, 1, 28, 112) -> split into 4 images of 28x28
     """
 
-    def __init__(self, n_images: int, n_values: int, hidden_dim: int = 256):
+    def __init__(self, n_images: int, n_values: int, hidden_dim: int = 256, use_shared_head: bool = True):
         super().__init__()
         self.n_images = n_images
         self.n_values = n_values
+        self.use_shared_head = use_shared_head
 
         # Shared CNN encoder for 28x28 grayscale images
         self.encoder = nn.Sequential(
@@ -85,10 +66,15 @@ class MNISTConceptEncoder(nn.Module):
             nn.ReLU(),
         )
 
-        # Concept prediction heads (one per image)
-        self.heads = nn.ModuleList([
-            nn.Linear(hidden_dim, n_values) for _ in range(n_images)
-        ])
+        # Classification head: shared (better) or separate per image
+        if use_shared_head:
+            # Single shared head for all concept positions (better data efficiency)
+            self.head = nn.Linear(hidden_dim, n_values)
+        else:
+            # Separate head for each concept position (original approach)
+            self.heads = nn.ModuleList([
+                nn.Linear(hidden_dim, n_values) for _ in range(n_images)
+            ])
 
     def forward(self, x_BNX: Tensor) -> Tensor:
         """
@@ -106,16 +92,25 @@ class MNISTConceptEncoder(nn.Module):
             # Reshape: (B, 1, 28, n*28) -> (B, n, 1, 28, 28)
             x_BNX = x_BNX.view(B, 1, 28, self.n_images, img_width).permute(0, 3, 1, 2, 4)
 
-        logits_list = []
-        for i in range(self.n_images):
-            x_i = x_BNX[:, i]  # (B, 1, 28, 28)
-            if x_i.dim() == 3:
-                x_i = x_i.unsqueeze(1)
-            h_i = self.encoder(x_i)  # (B, hidden)
-            logits_i = self.heads[i](h_i)  # (B, D)
-            logits_list.append(logits_i)
+        if self.use_shared_head:
+            # Batch all images together for efficiency with shared head
+            x_flat = x_BNX.reshape(B * self.n_images, 1, 28, 28)  # (B*n_images, 1, 28, 28)
+            h_flat = self.encoder(x_flat)  # (B*n_images, hidden)
+            logits_flat = self.head(h_flat)  # (B*n_images, D)
+            logits = logits_flat.view(B, self.n_images, self.n_values)  # (B, N, D)
+        else:
+            # Process each image with separate heads
+            logits_list = []
+            for i in range(self.n_images):
+                x_i = x_BNX[:, i]  # (B, 1, 28, 28)
+                if x_i.dim() == 3:
+                    x_i = x_i.unsqueeze(1)
+                h_i = self.encoder(x_i)  # (B, hidden)
+                logits_i = self.heads[i](h_i)  # (B, D)
+                logits_list.append(logits_i)
+            logits = torch.stack(logits_list, dim=1)  # (B, N, D)
 
-        return torch.stack(logits_list, dim=1)  # (B, N, D)
+        return logits
 
 
 # Keep old name for backwards compatibility
@@ -162,37 +157,13 @@ def compute_ece(probs: np.ndarray, targets: np.ndarray, n_bins: int = 10) -> flo
 
     return ece
 
-
-def compute_macro_f1_y(y_preds: np.ndarray, y_targets: np.ndarray) -> float:
-    """
-    Compute macro F1 for y predictions.
-
-    For MNIST: y is a single value (sum), compute F1 directly.
-    """
-    return f1_score(y_targets.flatten(), y_preds.flatten(), average='macro', zero_division=0)
-
-
-def compute_macro_f1_w(w_preds: np.ndarray, w_targets: np.ndarray) -> float:
-    """
-    Compute macro F1 for concept predictions.
-
-    Compute F1 per concept dimension and average.
-    """
-    f1_scores = []
-    for dim in range(w_preds.shape[1]):
-        f1 = f1_score(w_targets[:, dim], w_preds[:, dim], average='macro', zero_division=0)
-        f1_scores.append(f1)
-    return np.mean(f1_scores)
-
-
-class IterativeGenerativeNeSy(nn.Module):
+class GenerativeNeSy(nn.Module):
     """
     Generative NeSy with iterative refinement.
 
     Key ideas:
     1. Use semantic loss for constraint satisfaction
     2. Use entropy regularization to avoid shortcuts (conditional or unconditional)
-    3. Use ITERATIVE REFINEMENT during training to mimic diffusion
 
     Entropy options:
     - conditional=True:  H(w|x,y) - entropy over valid w's for given y (better OOD)
@@ -206,9 +177,8 @@ class IterativeGenerativeNeSy(nn.Module):
         constraint_fn: callable = None,
         entropy_weight: float = 1.6,
         conditional_entropy: bool = True,
-        n_refine_steps: int = 5,
-        hidden_dim: int = 256,
         encoder: nn.Module = None,
+        use_shared_head: bool = True,
     ):
         super().__init__()
         self.n_images = n_images
@@ -216,20 +186,12 @@ class IterativeGenerativeNeSy(nn.Module):
         self.constraint_fn = constraint_fn or (lambda w: w.sum(dim=-1, keepdim=True))
         self.entropy_weight = entropy_weight
         self.conditional_entropy = conditional_entropy
-        self.n_refine_steps = n_refine_steps
 
         # Use provided encoder or create default MNIST encoder
         if encoder is not None:
             self.encoder = encoder
         else:
-            self.encoder = MNISTConceptEncoder(n_images, n_values, hidden_dim)
-
-        # Refinement network: takes current prediction + image features -> refined prediction
-        self.refine_net = nn.Sequential(
-            nn.Linear(hidden_dim + n_values + 1, hidden_dim),  # +1 for constraint feedback
-            nn.ReLU(),
-            nn.Linear(hidden_dim, n_values),
-        )
+            self.encoder = MNISTConceptEncoder(n_images, n_values, use_shared_head=use_shared_head)
 
         # Pre-compute all valid w combinations
         self._init_valid_assignments()
@@ -440,6 +402,10 @@ def train_and_evaluate():
                         help='Use H(w|x,y) conditional entropy (default). Better for OOD.')
     parser.add_argument('--unconditional_entropy', action='store_true', default=False,
                         help='Use H(w|x) unconditional entropy. Better for ID concept acc.')
+    parser.add_argument('--use_shared_head', action='store_true', default=True,
+                        help='Use shared classification head (default). Better convergence.')
+    parser.add_argument('--separate_heads', action='store_true', default=False,
+                        help='Use separate heads per concept position.')
     parser.add_argument('--test_every', type=int, default=10)
     parser.add_argument('--n_values', type=int, default=5)
     parser.add_argument('--use_wandb', action='store_true', default=True)
@@ -450,16 +416,18 @@ def train_and_evaluate():
     if args.dataset not in ['halfmnist', 'shortmnist', 'xor']:
         raise ValueError(f"Unknown dataset: {args.dataset}. Supported: halfmnist, shortmnist, xor")
 
-    # Determine entropy type
+    # Determine entropy type and head type
     use_conditional = not args.unconditional_entropy
     entropy_type = 'conditional' if use_conditional else 'unconditional'
+    use_shared_head = not args.separate_heads
+    head_type = 'shared' if use_shared_head else 'separate'
 
     # Initialize wandb
     run = wandb.init(
         project=args.wandb_project,
-        name=f"GenNeSy-{args.dataset}-ew{args.entropy_weight}-{entropy_type[:4]}",
+        name=f"GenNeSy-{args.dataset}-ew{args.entropy_weight}-{entropy_type[:4]}-{head_type[:3]}",
         config={
-            'model': 'IterativeGenerativeNeSy',
+            'model': 'GenerativeNeSy',
             'dataset': args.dataset,
             'n_epochs': args.n_epochs,
             'lr': args.lr,
@@ -467,6 +435,8 @@ def train_and_evaluate():
             'entropy_weight': args.entropy_weight,
             'entropy_type': entropy_type,
             'conditional_entropy': use_conditional,
+            'use_shared_head': use_shared_head,
+            'head_type': head_type,
             'n_values': args.n_values,
         },
         mode="online" if args.use_wandb else "offline",
@@ -514,16 +484,18 @@ def train_and_evaluate():
         raise ValueError(f"Unknown dataset: {args.dataset}. Supported: halfmnist, shortmnist, xor")
 
     # Create model
-    model = IterativeGenerativeNeSy(
+    model = GenerativeNeSy(
         n_images=n_images,
         n_values=n_values,
         constraint_fn=constraint_fn,
         entropy_weight=args.entropy_weight,
         conditional_entropy=use_conditional,
+        use_shared_head=use_shared_head,
     ).to(device)
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Entropy type: {entropy_type} ({'H(w|x,y)' if use_conditional else 'H(w|x)'})")
+    print(f"Head type: {head_type} ({'shared across positions' if use_shared_head else 'separate per position'})")
 
     # Log model info to wandb (allow_val_change for dataset-specific overrides)
     wandb.config.update({

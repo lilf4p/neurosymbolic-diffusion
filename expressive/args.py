@@ -121,6 +121,12 @@ class MNISTAbsorbingArguments(AbsArguments, MNISTArguments):
     use_cnn: bool = False
     cnn_hidden_size: int = 256
 
+    # Use Generative NeSy with Semantic Loss (scalable via REINFORCE sampling)
+    use_semantic_loss: bool = False
+    sl_entropy_weight: float = 0.01  # Entropy regularization weight for semantic loss
+    sl_conditional_entropy: bool = True  # Use H(w|x,y) conditional entropy (True) or H(w|x) unconditional (False)
+    sl_use_fft: bool = None  # Use FFT-based convolution for scalability (auto-selected for N>=3 if None)
+
 class RSBenchArguments(AbsArguments):
     dataset: str = "halfmnist" # [halfmnist, shortcutmnist, boia, permutedhalfmnist]
     c_sup: int = 1

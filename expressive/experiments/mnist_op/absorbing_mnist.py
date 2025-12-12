@@ -6,7 +6,7 @@ from torch import Tensor
 from torch.nn import Linear
 
 from expressive.args import MNISTAbsorbingArguments
-from expressive.experiments.mnist_op.models import MNISTEncoder, SimpleCNNNeSy
+from expressive.experiments.mnist_op.models import MNISTEncoder, SimpleCNNNeSy, GenerativeNeSyMNISTAdd, GenerativeNeSyMNISTAddFFT
 from expressive.methods.base_model import BaseNeSyDiffusion, Problem
 from expressive.methods.cond_model import CondNeSyDiffusion
 from expressive.methods.simple_nesy_diff import SimpleNeSyDiffusion
@@ -80,18 +80,42 @@ class MNISTAddProblem(Problem):
 
         return ty_SKBY
 
-def create_mnistadd(args: MNISTAbsorbingArguments) -> Union[BaseNeSyDiffusion, SimpleCNNNeSy]:
+def create_mnistadd(args: MNISTAbsorbingArguments) -> Union[BaseNeSyDiffusion, SimpleCNNNeSy, GenerativeNeSyMNISTAdd, GenerativeNeSyMNISTAddFFT]:
     """
-    Factory function to create either a diffusion-based or CNN-based model
-    for the MNIST addition task.
+    Factory function to create a model for the MNIST addition task.
+
+    Supports:
+    - Diffusion-based NeSy model (default)
+    - Simple CNN with supervision (use_cnn=True)
+    - Generative NeSy with Semantic Loss - Exact enumeration (use_semantic_loss=True, N<=2)
+    - Generative NeSy with Semantic Loss - FFT convolution (use_semantic_loss=True, sl_use_fft=True or N>=3)
 
     Args:
         args: Configuration arguments containing model settings
 
     Returns:
-        Either a diffusion model (BaseNeSyDiffusion) or a simple CNN model (SimpleCNNNeSy)
+        One of: diffusion model, CNN model, GenerativeNeSy model, or GenerativeNeSyFFT model
     """
-    if args.use_cnn:
+    if getattr(args, 'use_semantic_loss', False):
+        # Decide between exact enumeration and FFT-based approach
+        use_fft = getattr(args, 'sl_use_fft', None)
+
+        # Auto-select: use FFT for N >= 3 (10^6 combinations is too many for exact enum)
+        if use_fft is None:
+            use_fft = args.N >= 3
+
+        if use_fft:
+            print(f"Using GenerativeNeSyMNISTAddFFT (FFT-based) with hidden_size={args.cnn_hidden_size}")
+            print(f"  Entropy weight: {getattr(args, 'sl_entropy_weight', 0.1)}")
+            print(f"  Method: FFT convolution (O(L log L) - scalable for large N)")
+            return GenerativeNeSyMNISTAddFFT(args)
+        else:
+            print(f"Using GenerativeNeSyMNISTAdd (Exact Enumeration) with hidden_size={args.cnn_hidden_size}")
+            print(f"  Entropy weight: {getattr(args, 'sl_entropy_weight', 0.1)}")
+            print(f"  Method: Exact enumeration (10^{2*args.N} combinations)")
+            print(f"  Conditional entropy: {getattr(args, 'sl_conditional_entropy', True)}")
+            return GenerativeNeSyMNISTAdd(args)
+    elif args.use_cnn:
         print(f"Using SimpleCNNNeSy model with hidden_size={args.cnn_hidden_size}")
         return SimpleCNNNeSy(args)
     else:
