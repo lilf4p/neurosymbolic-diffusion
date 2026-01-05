@@ -25,7 +25,7 @@ class IterNeSyLog:
     accuracy_y: float = 0.0
     entropy: float = 0.0
     cond_entropy: float = 0.0
-    uncond_entropy: float = 0.0
+    marginal_entropy: float = 0.0
     loss: float = 0.0
     n_batches: int = 0
 
@@ -34,7 +34,7 @@ class IterNeSyLog:
         self.accuracy_y = 0.0
         self.entropy = 0.0
         self.cond_entropy = 0.0
-        self.uncond_entropy = 0.0
+        self.marginal_entropy = 0.0
         self.loss = 0.0
         self.n_batches = 0
 
@@ -159,15 +159,18 @@ def compute_ece(probs: np.ndarray, targets: np.ndarray, n_bins: int = 10) -> flo
 
 class GenerativeNeSy(nn.Module):
     """
-    Generative NeSy with iterative refinement.
+    Generative NeSy with semantic loss and entropy regularization.
 
     Key ideas:
     1. Use semantic loss for constraint satisfaction
-    2. Use entropy regularization to avoid shortcuts (conditional or unconditional)
+    2. Use entropy regularization to avoid shortcuts
 
     Entropy options:
-    - conditional=True:  H(w|x,y) - entropy over valid w's for given y (better OOD)
-    - conditional=False: H(w|x)   - entropy over all w's (better ID concept acc)
+    - conditional=True:  H(w|x,y) - entropy over valid w's for given y (~70% concept acc)
+                         Good for OOD generalization but limits concept accuracy for ambiguous sums.
+    - conditional=False: (1/N) * sum_i H(w_i|x) - MARGINAL entropy per concept (like NeSy DM!)
+                         This is what NeSy DM actually uses. Encourages each digit prediction to be
+                         uncertain independently, without encouraging joint correlation.
     """
 
     def __init__(
@@ -255,16 +258,23 @@ class GenerativeNeSy(nn.Module):
             dim=-1
         ) / N  # Normalize by number of concepts
 
-        # Unconditional entropy H(w|x) - entropy over ALL w's
-        uncond_entropy_B = -torch.sum(
+        # Joint unconditional entropy H(w1,w2|x) - entropy over ALL w pairs (BAD - causes 40% acc)
+        joint_entropy_B = -torch.sum(
             probs_BM * torch.log(probs_BM + 1e-10),
             dim=-1
         ) / N  # Normalize by number of concepts
 
-        # Select which entropy to use based on setting
-        entropy_B = cond_entropy_B if self.conditional_entropy else uncond_entropy_B
+        # MARGINAL unconditional entropy = (1/N) * sum_i H(w_i|x) - entropy per concept independently
+        # This is what NeSy DM actually uses! Each concept's distribution is encouraged to be uncertain.
+        marginal_entropy_B = -torch.sum(
+            probs_BND * torch.log(probs_BND + 1e-10),
+            dim=-1  # sum over values D
+        ).mean(dim=-1)  # mean over concepts N
 
-        return loss_B, entropy_B, probs_BM, cond_entropy_B, uncond_entropy_B
+        # Select which entropy to use based on setting
+        entropy_B = cond_entropy_B if self.conditional_entropy else marginal_entropy_B
+
+        return loss_B, entropy_B, probs_BM, cond_entropy_B, marginal_entropy_B
 
     def predict_y_from_probs(self, probs_BM: Tensor) -> Tensor:
         """
@@ -331,7 +341,7 @@ class GenerativeNeSy(nn.Module):
     ) -> Tensor:
         """Compute loss for MNIST-like datasets with exact enumeration."""
         # Compute loss, entropy, and joint probabilities
-        loss_B, entropy_B, probs_BM, cond_ent_B, uncond_ent_B = self.compute_semantic_loss_and_entropy(logits_BND, y_BY)
+        loss_B, entropy_B, probs_BM, cond_ent_B, marginal_ent_B = self.compute_semantic_loss_and_entropy(logits_BND, y_BY)
 
         # Total loss (entropy_B is already selected based on self.conditional_entropy)
         loss = loss_B.mean() - self.entropy_weight * entropy_B.mean()
@@ -342,7 +352,7 @@ class GenerativeNeSy(nn.Module):
             log.loss += loss.item()
             log.entropy += entropy_B.mean().item()
             log.cond_entropy += cond_ent_B.mean().item()
-            log.uncond_entropy += uncond_ent_B.mean().item()
+            log.marginal_entropy += marginal_ent_B.mean().item()
 
             # Predict y first, then predict w conditioned on predicted y
             # This matches how NeSy diffusion logs: sample w -> compute y from w -> measure accuracy
@@ -397,11 +407,12 @@ def train_and_evaluate():
     parser.add_argument('--n_epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--entropy_weight', type=float, default=1.6)
+    parser.add_argument('--entropy_weight', type=float, default=None,
+                        help='Entropy weight. Default: 1.6 for conditional, 0.01 for marginal.')
     parser.add_argument('--conditional_entropy', action='store_true', default=True,
-                        help='Use H(w|x,y) conditional entropy (default). Better for OOD.')
-    parser.add_argument('--unconditional_entropy', action='store_true', default=False,
-                        help='Use H(w|x) unconditional entropy. Better for ID concept acc.')
+                        help='Use H(w|x,y) conditional entropy (default). ~70%% concept acc.')
+    parser.add_argument('--marginal_entropy', action='store_true', default=False,
+                        help='Use (1/N)*sum H(w_i|x) marginal entropy (like NeSy DM). Better concept acc.')
     parser.add_argument('--use_shared_head', action='store_true', default=True,
                         help='Use shared classification head (default). Better convergence.')
     parser.add_argument('--separate_heads', action='store_true', default=False,
@@ -417,10 +428,17 @@ def train_and_evaluate():
         raise ValueError(f"Unknown dataset: {args.dataset}. Supported: halfmnist, shortmnist, xor")
 
     # Determine entropy type and head type
-    use_conditional = not args.unconditional_entropy
-    entropy_type = 'conditional' if use_conditional else 'unconditional'
+    use_conditional = not args.marginal_entropy
+    entropy_type = 'conditional' if use_conditional else 'marginal'
     use_shared_head = not args.separate_heads
     head_type = 'shared' if use_shared_head else 'separate'
+
+    # Set default entropy weight based on entropy type
+    # Conditional entropy H(w|x,y) has smaller range → use larger weight (1.6)
+    # Marginal entropy H(w_i|x) has larger range → use smaller weight (0.01)
+    if args.entropy_weight is None:
+        args.entropy_weight = 1.6 if use_conditional else 0.01
+        print(f"Using default entropy_weight={args.entropy_weight} for {entropy_type} entropy")
 
     # Initialize wandb
     run = wandb.init(
@@ -536,7 +554,7 @@ def train_and_evaluate():
             'train/loss': log.loss / n,
             'train/entropy': log.entropy / n,
             'train/cond_entropy': log.cond_entropy / n,
-            'train/uncond_entropy': log.uncond_entropy / n,
+            'train/marginal_entropy': log.marginal_entropy / n,
             'train/acc_y': log.accuracy_y / n,
             'train/acc_w': log.accuracy_w / n,
         }
@@ -544,7 +562,7 @@ def train_and_evaluate():
         epoch_time = time.time() - start_time
 
         print(f"Epoch {epoch+1}/{args.n_epochs}: Loss={train_stats['train/loss']:.4f}, "
-              f"H={train_stats['train/entropy']:.4f} (cond={train_stats['train/cond_entropy']:.4f}, uncond={train_stats['train/uncond_entropy']:.4f}), "
+              f"H={train_stats['train/entropy']:.4f} (cond={train_stats['train/cond_entropy']:.4f}, marg={train_stats['train/marginal_entropy']:.4f}), "
               f"ACC_Y={train_stats['train/acc_y']*100:.1f}%, ACC_W={train_stats['train/acc_w']*100:.1f}%")
 
         # Log training stats to wandb
