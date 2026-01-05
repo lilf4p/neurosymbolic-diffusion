@@ -1,6 +1,11 @@
 """
 
-NeSy CNN model with Semantic Loss and Entropy Regularization.
+NeSy CNN model with Semantic Loss, Entropy Regularization, and Topological Consistency.
+
+Key components:
+1. Semantic Loss: -log p(y|x) where p(y|x) = sum_w p(w|x) * 1{f(w)=y}
+2. Entropy Regularization: Maximize H(w|x) or H(w|x,y) to prevent shortcuts
+3. Topological Consistency: Enforce latent geometry matches concept geometry (NEW)
 
 """
 
@@ -25,7 +30,8 @@ class IterNeSyLog:
     accuracy_y: float = 0.0
     entropy: float = 0.0
     cond_entropy: float = 0.0
-    marginal_entropy: float = 0.0
+    uncond_entropy: float = 0.0
+    topo_loss: float = 0.0
     loss: float = 0.0
     n_batches: int = 0
 
@@ -34,9 +40,102 @@ class IterNeSyLog:
         self.accuracy_y = 0.0
         self.entropy = 0.0
         self.cond_entropy = 0.0
-        self.marginal_entropy = 0.0
+        self.uncond_entropy = 0.0
+        self.topo_loss = 0.0
         self.loss = 0.0
         self.n_batches = 0
+
+
+class TopologicalConsistencyLoss(nn.Module):
+    """
+    Enforces that the geometry of the latent/embedding space matches
+    the geometry of the concept space.
+
+    This provides an inductive bias: if concepts are "close" (e.g., (0,1) vs (0,2)),
+    their learned representations should also be close. This helps OOD generalization
+    by ensuring the model learns a geometrically meaningful representation.
+
+    Multiple distance metrics and normalization strategies available.
+    """
+
+    def __init__(
+        self,
+        distance_metric: str = 'l2',
+        normalization: str = 'mean',
+        use_soft_rank: bool = False,
+    ):
+        """
+        Args:
+            distance_metric: 'l2', 'l1', or 'cosine'
+            normalization: 'mean' (divide by mean), 'minmax' (scale to [0,1]), or 'none'
+            use_soft_rank: If True, compare rank orderings instead of absolute distances
+        """
+        super().__init__()
+        self.distance_metric = distance_metric
+        self.normalization = normalization
+        self.use_soft_rank = use_soft_rank
+
+    def compute_pairwise_distance(self, x: Tensor, metric: str = 'l2') -> Tensor:
+        """Compute pairwise distance matrix."""
+        if metric == 'l2':
+            return torch.cdist(x, x, p=2)
+        elif metric == 'l1':
+            return torch.cdist(x, x, p=1)
+        elif metric == 'cosine':
+            # Cosine distance = 1 - cosine_similarity
+            x_norm = F.normalize(x, p=2, dim=-1)
+            sim = torch.mm(x_norm, x_norm.t())
+            return 1 - sim
+        else:
+            raise ValueError(f"Unknown distance metric: {metric}")
+
+    def normalize_distances(self, dist: Tensor) -> Tensor:
+        """Normalize distance matrix."""
+        if self.normalization == 'mean':
+            return dist / (dist.mean() + 1e-8)
+        elif self.normalization == 'minmax':
+            d_min, d_max = dist.min(), dist.max()
+            return (dist - d_min) / (d_max - d_min + 1e-8)
+        elif self.normalization == 'none':
+            return dist
+        else:
+            raise ValueError(f"Unknown normalization: {self.normalization}")
+
+    def soft_rank(self, dist: Tensor, temperature: float = 1.0) -> Tensor:
+        """
+        Compute soft ranks using softmax.
+        For each row, compute the relative ranking of distances.
+        """
+        # Negative because we want smaller distances to have higher "rank"
+        return F.softmax(-dist / temperature, dim=-1)
+
+    def forward(self, z: Tensor, concepts: Tensor) -> Tensor:
+        """
+        Compute topological consistency loss.
+
+        Args:
+            z: Latent representations [B, D] or expected concepts [B, N]
+            concepts: True concept values [B, N]
+
+        Returns:
+            Scalar loss value
+        """
+        # Compute pairwise distances
+        z_dist = self.compute_pairwise_distance(z, self.distance_metric)
+        c_dist = self.compute_pairwise_distance(concepts.float(), 'l2')  # Always L2 for concepts
+
+        if self.use_soft_rank:
+            # Compare rank orderings (more robust to scale differences)
+            z_rank = self.soft_rank(z_dist)
+            c_rank = self.soft_rank(c_dist)
+            topo_loss = F.mse_loss(z_rank, c_rank)
+        else:
+            # Compare normalized distances
+            z_dist_norm = self.normalize_distances(z_dist)
+            c_dist_norm = self.normalize_distances(c_dist)
+            topo_loss = F.mse_loss(z_dist_norm, c_dist_norm)
+
+        return topo_loss
 
 
 class MNISTConceptEncoder(nn.Module):
@@ -163,14 +262,17 @@ class GenerativeNeSy(nn.Module):
 
     Key ideas:
     1. Use semantic loss for constraint satisfaction
-    2. Use entropy regularization to avoid shortcuts
+    2. Use entropy regularization to avoid shortcuts (conditional or unconditional)
+    3. Use topological consistency to enforce geometric structure (NEW)
 
     Entropy options:
-    - conditional=True:  H(w|x,y) - entropy over valid w's for given y (~70% concept acc)
-                         Good for OOD generalization but limits concept accuracy for ambiguous sums.
-    - conditional=False: (1/N) * sum_i H(w_i|x) - MARGINAL entropy per concept (like NeSy DM!)
-                         This is what NeSy DM actually uses. Encourages each digit prediction to be
-                         uncertain independently, without encouraging joint correlation.
+    - conditional=True:  H(w|x,y) - entropy over valid w's for given y (better OOD)
+    - conditional=False: H(w|x)   - entropy over all w's (better ID concept acc)
+
+    Topology options:
+    - use_topology=True: Add topological loss to enforce latent geometry matches concept geometry
+    - topology_weight: Weight for topology loss (default: 1.0)
+    - topology_mode: 'expected' (use expected concepts) or 'logits' (use raw logits)
     """
 
     def __init__(
@@ -182,6 +284,13 @@ class GenerativeNeSy(nn.Module):
         conditional_entropy: bool = True,
         encoder: nn.Module = None,
         use_shared_head: bool = True,
+        # Topology options
+        use_topology: bool = False,
+        topology_weight: float = 1.0,
+        topology_mode: str = 'expected',  # 'expected', 'logits', or 'probs'
+        topology_distance: str = 'l2',
+        topology_normalization: str = 'mean',
+        topology_soft_rank: bool = False,
     ):
         super().__init__()
         self.n_images = n_images
@@ -190,11 +299,24 @@ class GenerativeNeSy(nn.Module):
         self.entropy_weight = entropy_weight
         self.conditional_entropy = conditional_entropy
 
+        # Topology settings
+        self.use_topology = use_topology
+        self.topology_weight = topology_weight
+        self.topology_mode = topology_mode
+
         # Use provided encoder or create default MNIST encoder
         if encoder is not None:
             self.encoder = encoder
         else:
             self.encoder = MNISTConceptEncoder(n_images, n_values, use_shared_head=use_shared_head)
+
+        # Topology loss module
+        if use_topology:
+            self.topo_loss_fn = TopologicalConsistencyLoss(
+                distance_metric=topology_distance,
+                normalization=topology_normalization,
+                use_soft_rank=topology_soft_rank,
+            )
 
         # Pre-compute all valid w combinations
         self._init_valid_assignments()
@@ -340,11 +462,37 @@ class GenerativeNeSy(nn.Module):
         eval_w_BN: Optional[Tensor] = None,
     ) -> Tensor:
         """Compute loss for MNIST-like datasets with exact enumeration."""
+        B, N, D = logits_BND.shape
+
         # Compute loss, entropy, and joint probabilities
         loss_B, entropy_B, probs_BM, cond_ent_B, marginal_ent_B = self.compute_semantic_loss_and_entropy(logits_BND, y_BY)
 
-        # Total loss (entropy_B is already selected based on self.conditional_entropy)
+        # Base loss: semantic loss - entropy regularization
         loss = loss_B.mean() - self.entropy_weight * entropy_B.mean()
+
+        # Topological consistency loss (optional)
+        topo_loss_value = 0.0
+        if self.use_topology and eval_w_BN is not None:
+            # Compute latent representation based on topology_mode
+            if self.topology_mode == 'expected':
+                # Expected concept values: E[c_i] = sum_j p(c_i=j) * j
+                probs_BND = F.softmax(logits_BND, dim=-1)  # (B, N, D)
+                concept_values = torch.arange(D, device=logits_BND.device, dtype=torch.float32)
+                z = (probs_BND * concept_values).sum(dim=-1)  # (B, N)
+            elif self.topology_mode == 'logits':
+                # Flatten logits as representation
+                z = logits_BND.view(B, -1)  # (B, N*D)
+            elif self.topology_mode == 'probs':
+                # Flatten probabilities as representation
+                probs_BND = F.softmax(logits_BND, dim=-1)
+                z = probs_BND.view(B, -1)  # (B, N*D)
+            else:
+                raise ValueError(f"Unknown topology_mode: {self.topology_mode}")
+
+            # Compute topology loss
+            topo_loss = self.topo_loss_fn(z, eval_w_BN.float())
+            loss = loss + self.topology_weight * topo_loss
+            topo_loss_value = topo_loss.item()
 
         # Logging
         if log is not None:
@@ -352,7 +500,8 @@ class GenerativeNeSy(nn.Module):
             log.loss += loss.item()
             log.entropy += entropy_B.mean().item()
             log.cond_entropy += cond_ent_B.mean().item()
-            log.marginal_entropy += marginal_ent_B.mean().item()
+            log.uncond_entropy += uncond_ent_B.mean().item()
+            log.topo_loss += topo_loss_value
 
             # Predict y first, then predict w conditioned on predicted y
             # This matches how NeSy diffusion logs: sample w -> compute y from w -> measure accuracy
@@ -417,6 +566,25 @@ def train_and_evaluate():
                         help='Use shared classification head (default). Better convergence.')
     parser.add_argument('--separate_heads', action='store_true', default=False,
                         help='Use separate heads per concept position.')
+    # Topology options
+    parser.add_argument('--use_topology', action='store_true', default=False,
+                        help='Enable topological consistency loss.')
+    parser.add_argument('--topology_weight', type=float, default=1.0,
+                        help='Weight for topology loss.')
+    parser.add_argument('--topology_mode', type=str, default='expected',
+                        choices=['expected', 'logits', 'probs'],
+                        help='How to compute latent representation for topology: '
+                             'expected (E[c]), logits (raw), probs (softmax).')
+    parser.add_argument('--topology_distance', type=str, default='l2',
+                        choices=['l2', 'l1', 'cosine'],
+                        help='Distance metric for topology loss.')
+    parser.add_argument('--topology_normalization', type=str, default='mean',
+                        choices=['mean', 'minmax', 'none'],
+                        help='Normalization for topology distances.')
+    parser.add_argument('--topology_soft_rank', action='store_true', default=False,
+                        help='Use soft ranking instead of direct distance comparison.')
+    parser.add_argument('--no_entropy', action='store_true', default=False,
+                        help='Disable entropy term (use topology only).')
     parser.add_argument('--test_every', type=int, default=10)
     parser.add_argument('--n_values', type=int, default=5)
     parser.add_argument('--use_wandb', action='store_true', default=True)
@@ -433,29 +601,43 @@ def train_and_evaluate():
     use_shared_head = not args.separate_heads
     head_type = 'shared' if use_shared_head else 'separate'
 
-    # Set default entropy weight based on entropy type
-    # Conditional entropy H(w|x,y) has smaller range → use larger weight (1.6)
-    # Marginal entropy H(w_i|x) has larger range → use smaller weight (0.01)
-    if args.entropy_weight is None:
-        args.entropy_weight = 1.6 if use_conditional else 0.01
-        print(f"Using default entropy_weight={args.entropy_weight} for {entropy_type} entropy")
+    # Determine effective entropy weight
+    effective_entropy_weight = 0.0 if args.no_entropy else args.entropy_weight
+
+    # Build run name with topology info
+    run_name_parts = [f"GenNeSy-{args.dataset}"]
+    if not args.no_entropy:
+        run_name_parts.append(f"ew{args.entropy_weight}-{entropy_type[:4]}")
+    if args.use_topology:
+        run_name_parts.append(f"topo{args.topology_weight}-{args.topology_mode[:3]}")
+    if args.no_entropy and not args.use_topology:
+        run_name_parts.append("baseline")
+    run_name = "-".join(run_name_parts)
 
     # Initialize wandb
     run = wandb.init(
         project=args.wandb_project,
-        name=f"GenNeSy-{args.dataset}-ew{args.entropy_weight}-{entropy_type[:4]}-{head_type[:3]}",
+        name=run_name,
         config={
             'model': 'GenerativeNeSy',
             'dataset': args.dataset,
             'n_epochs': args.n_epochs,
             'lr': args.lr,
             'batch_size': args.batch_size,
-            'entropy_weight': args.entropy_weight,
-            'entropy_type': entropy_type,
+            'entropy_weight': effective_entropy_weight,
+            'entropy_type': entropy_type if not args.no_entropy else 'disabled',
             'conditional_entropy': use_conditional,
             'use_shared_head': use_shared_head,
             'head_type': head_type,
             'n_values': args.n_values,
+            # Topology config
+            'use_topology': args.use_topology,
+            'topology_weight': args.topology_weight if args.use_topology else 0.0,
+            'topology_mode': args.topology_mode,
+            'topology_distance': args.topology_distance,
+            'topology_normalization': args.topology_normalization,
+            'topology_soft_rank': args.topology_soft_rank,
+            'no_entropy': args.no_entropy,
         },
         mode="online" if args.use_wandb else "offline",
     )
@@ -506,13 +688,29 @@ def train_and_evaluate():
         n_images=n_images,
         n_values=n_values,
         constraint_fn=constraint_fn,
-        entropy_weight=args.entropy_weight,
+        entropy_weight=effective_entropy_weight,
         conditional_entropy=use_conditional,
         use_shared_head=use_shared_head,
+        # Topology options
+        use_topology=args.use_topology,
+        topology_weight=args.topology_weight,
+        topology_mode=args.topology_mode,
+        topology_distance=args.topology_distance,
+        topology_normalization=args.topology_normalization,
+        topology_soft_rank=args.topology_soft_rank,
     ).to(device)
 
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Entropy type: {entropy_type} ({'H(w|x,y)' if use_conditional else 'H(w|x)'})")
+    if not args.no_entropy:
+        print(f"Entropy: weight={effective_entropy_weight}, type={entropy_type} ({'H(w|x,y)' if use_conditional else 'H(w|x)'})")
+    else:
+        print(f"Entropy: DISABLED")
+    if args.use_topology:
+        print(f"Topology: weight={args.topology_weight}, mode={args.topology_mode}, "
+              f"distance={args.topology_distance}, norm={args.topology_normalization}, "
+              f"soft_rank={args.topology_soft_rank}")
+    else:
+        print(f"Topology: DISABLED")
     print(f"Head type: {head_type} ({'shared across positions' if use_shared_head else 'separate per position'})")
 
     # Log model info to wandb (allow_val_change for dataset-specific overrides)
@@ -554,16 +752,22 @@ def train_and_evaluate():
             'train/loss': log.loss / n,
             'train/entropy': log.entropy / n,
             'train/cond_entropy': log.cond_entropy / n,
-            'train/marginal_entropy': log.marginal_entropy / n,
+            'train/uncond_entropy': log.uncond_entropy / n,
+            'train/topo_loss': log.topo_loss / n,
             'train/acc_y': log.accuracy_y / n,
             'train/acc_w': log.accuracy_w / n,
         }
 
         epoch_time = time.time() - start_time
 
-        print(f"Epoch {epoch+1}/{args.n_epochs}: Loss={train_stats['train/loss']:.4f}, "
-              f"H={train_stats['train/entropy']:.4f} (cond={train_stats['train/cond_entropy']:.4f}, marg={train_stats['train/marginal_entropy']:.4f}), "
-              f"ACC_Y={train_stats['train/acc_y']*100:.1f}%, ACC_W={train_stats['train/acc_w']*100:.1f}%")
+        # Build print message
+        msg = f"Epoch {epoch+1}/{args.n_epochs}: Loss={train_stats['train/loss']:.4f}"
+        if not args.no_entropy:
+            msg += f", H={train_stats['train/entropy']:.4f}"
+        if args.use_topology:
+            msg += f", Topo={train_stats['train/topo_loss']:.4f}"
+        msg += f", ACC_Y={train_stats['train/acc_y']*100:.1f}%, ACC_W={train_stats['train/acc_w']*100:.1f}%"
+        print(msg)
 
         # Log training stats to wandb
         wandb.log({
